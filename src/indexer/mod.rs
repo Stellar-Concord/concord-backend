@@ -11,6 +11,11 @@ use std::time::Duration;
 use stellar_xdr::ScVal;
 
 const PAGE_LIMIT: u32 = 100;
+/// How far back to look on the very first poll (no cursor yet). RPC
+/// providers only retain events for a limited window; this stays
+/// comfortably inside typical retention (~1 day at Stellar's ~5s ledger
+/// close time) while still covering a freshly deployed contract's history.
+const BOOTSTRAP_LOOKBACK_LEDGERS: u32 = 17_280;
 
 pub async fn run(pool: PgPool, config: Config) {
     let rpc = SorobanRpcClient::new(config.soroban_rpc_url.clone());
@@ -38,7 +43,8 @@ async fn poll_once(
 ) -> Result<usize> {
     let (last_ledger, last_cursor) = db::get_cursor(pool).await?;
     let start_ledger = if last_cursor.is_none() && last_ledger == 0 {
-        Some(0)
+        let latest = rpc.get_latest_ledger().await?;
+        Some(latest.saturating_sub(BOOTSTRAP_LOOKBACK_LEDGERS).max(1))
     } else {
         None
     };
@@ -59,7 +65,7 @@ async fn poll_once(
             continue;
         }
         if let Err(err) = process_event(pool, http, event).await {
-            tracing::error!(?err, paging_token = %event.paging_token, "failed to process event, skipping");
+            tracing::error!(?err, paging_token = %event.id, "failed to process event, skipping");
         }
         processed += 1;
     }
@@ -69,7 +75,7 @@ async fn poll_once(
     // ledger range on every poll.
     let next_cursor = result
         .cursor
-        .or_else(|| result.events.last().map(|e| e.paging_token.clone()));
+        .or_else(|| result.events.last().map(|e| e.id.clone()));
     if let Some(cursor) = next_cursor {
         db::set_cursor(pool, result.latest_ledger as i64, &cursor).await?;
     }
