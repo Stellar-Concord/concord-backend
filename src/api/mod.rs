@@ -1,6 +1,8 @@
 mod auth;
 mod disputes;
 mod escrows;
+#[cfg(test)]
+mod tests;
 mod webhooks;
 
 use crate::state::AppState;

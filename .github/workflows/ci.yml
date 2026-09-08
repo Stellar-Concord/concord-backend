@@ -7,10 +7,25 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # api::tests uses #[sqlx::test], which connects here to create/migrate/drop
+  # an ephemeral database per test.
+  DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
