@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub struct SorobanRpcClient {
@@ -11,6 +12,13 @@ pub struct RpcEvent {
     #[serde(rename = "contractId")]
     pub contract_id: String,
     pub ledger: u32,
+    /// When the ledger this event is in was closed -- the closest thing to
+    /// an authoritative "when did this actually happen" available from an
+    /// event alone (contract events don't all carry their own timestamp
+    /// field), and more accurate than the indexer's own processing time,
+    /// which lags by up to the poll interval.
+    #[serde(rename = "ledgerClosedAt")]
+    pub ledger_closed_at: DateTime<Utc>,
     /// This event's own cursor position, usable as a paging token if the
     /// response as a whole doesn't carry one.
     pub id: String,
@@ -183,6 +191,10 @@ mod tests {
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].id, "0019567076431654912-0000000000");
         assert_eq!(result.events[0].ledger, 4555815);
+        assert_eq!(
+            result.events[0].ledger_closed_at.to_rfc3339(),
+            "2026-09-07T17:37:42+00:00"
+        );
         assert!(result.events[0].in_successful_contract_call);
         assert_eq!(
             result.cursor.as_deref(),

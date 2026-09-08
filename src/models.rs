@@ -81,6 +81,18 @@ pub struct EscrowRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub updated_ledger: i64,
+    /// Seconds the client has, after a milestone is submitted, before it
+    /// becomes auto-releasable. `0` for rows indexed before this field
+    /// existed.
+    pub review_period: i64,
+    /// The escrow's on-chain creation timestamp (`Escrow.created_at`) --
+    /// distinct from `created_at` above, which is when the indexer first
+    /// wrote this row. NULL for rows indexed before this field existed.
+    pub chain_created_at: Option<DateTime<Utc>>,
+    pub title: Option<String>,
+    pub metadata_uri: Option<String>,
+    /// Hex-encoded 32-byte hash of the content at `metadata_uri`.
+    pub metadata_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -91,6 +103,15 @@ pub struct MilestoneRow {
     pub amount: BigDecimal,
     pub status: String,
     pub updated_at: DateTime<Utc>,
+    /// NULL for rows indexed before this field existed.
+    pub deadline: Option<DateTime<Utc>>,
+    /// When `submit_milestone` was called. NULL until then.
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub evidence_uri: Option<String>,
+    /// Hex-encoded 32-byte hash of the content at `evidence_uri`.
+    pub evidence_hash: Option<String>,
+    /// 'approved' or 'auto_release'. NULL until the milestone is released.
+    pub released_via: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]

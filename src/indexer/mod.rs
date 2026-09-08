@@ -111,6 +111,25 @@ async fn process_event(pool: &PgPool, http: &reqwest::Client, event: &RpcEvent) 
             let provider = decode::sc_val_to_address(decode::map_get(&data, "provider")?)?;
             let arbitrator = decode::sc_val_to_address(decode::map_get(&data, "arbitrator")?)?;
             let token = decode::sc_val_to_address(decode::map_get(&data, "token")?)?;
+            let review_period =
+                decode::sc_val_to_u64(decode::map_get(&data, "review_period")?)? as i64;
+            let chain_created_at = decode::unix_seconds_to_datetime(decode::sc_val_to_u64(
+                decode::map_get(&data, "created_at")?,
+            )?)?;
+            let title =
+                decode::empty_as_none(decode::sc_val_to_string(decode::map_get(&data, "title")?)?);
+            let metadata_uri = decode::empty_as_none(decode::sc_val_to_string(decode::map_get(
+                &data,
+                "metadata_uri",
+            )?)?);
+            let metadata_hash = if metadata_uri.is_some() {
+                Some(decode::sc_val_to_bytes_hex(decode::map_get(
+                    &data,
+                    "metadata_hash",
+                )?)?)
+            } else {
+                None
+            };
             db::upsert_escrow(
                 pool,
                 escrow_id,
@@ -121,6 +140,11 @@ async fn process_event(pool: &PgPool, http: &reqwest::Client, event: &RpcEvent) 
                 &token,
                 "created",
                 ledger,
+                review_period,
+                chain_created_at,
+                title.as_deref(),
+                metadata_uri.as_deref(),
+                metadata_hash.as_deref(),
             )
             .await?;
 
@@ -133,6 +157,7 @@ async fn process_event(pool: &PgPool, http: &reqwest::Client, event: &RpcEvent) 
                     &milestone.description,
                     bigdecimal::BigDecimal::from(milestone.amount),
                     "pending",
+                    decode::unix_seconds_to_datetime(milestone.deadline)?,
                 )
                 .await?;
             }
@@ -143,15 +168,48 @@ async fn process_event(pool: &PgPool, http: &reqwest::Client, event: &RpcEvent) 
         "milestone_submitted" => {
             let milestone_id =
                 decode::sc_val_to_u32(decode::map_get(&data, "milestone_id")?)? as i32;
+            let evidence_uri = decode::empty_as_none(decode::sc_val_to_string(decode::map_get(
+                &data,
+                "evidence_uri",
+            )?)?);
+            let evidence_hash = if evidence_uri.is_some() {
+                Some(decode::sc_val_to_bytes_hex(decode::map_get(
+                    &data,
+                    "evidence_hash",
+                )?)?)
+            } else {
+                None
+            };
             db::set_escrow_status(pool, escrow_id, "in_progress", ledger).await?;
-            db::set_milestone_status(pool, escrow_id, milestone_id, "submitted").await?;
+            db::mark_milestone_submitted(
+                pool,
+                escrow_id,
+                milestone_id,
+                evidence_uri.as_deref(),
+                evidence_hash.as_deref(),
+                event.ledger_closed_at,
+            )
+            .await?;
         }
         "milestone_approved" => {
             let milestone_id =
                 decode::sc_val_to_u32(decode::map_get(&data, "milestone_id")?)? as i32;
-            db::set_milestone_status(pool, escrow_id, milestone_id, "released").await?;
+            db::release_milestone(pool, escrow_id, milestone_id, "approved").await?;
+        }
+        "milestone_auto_released" => {
+            let milestone_id =
+                decode::sc_val_to_u32(decode::map_get(&data, "milestone_id")?)? as i32;
+            db::release_milestone(pool, escrow_id, milestone_id, "auto_release").await?;
+        }
+        "milestone_expired" => {
+            let milestone_id =
+                decode::sc_val_to_u32(decode::map_get(&data, "milestone_id")?)? as i32;
+            db::set_milestone_status(pool, escrow_id, milestone_id, "expired").await?;
         }
         "escrow_cancelled" => {
+            db::set_escrow_status(pool, escrow_id, "cancelled", ledger).await?;
+        }
+        "escrow_mutually_cancelled" => {
             db::set_escrow_status(pool, escrow_id, "cancelled", ledger).await?;
         }
         "escrow_completed" => {

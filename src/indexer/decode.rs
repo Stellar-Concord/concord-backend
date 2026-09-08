@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+use chrono::{DateTime, Utc};
 use stellar_xdr::{Limits, PublicKey, ReadXdr, ScAddress, ScVal};
 
 pub fn decode_scval_base64(b64: &str) -> Result<ScVal> {
@@ -57,6 +58,35 @@ pub fn sc_val_to_string(val: &ScVal) -> Result<String> {
     }
 }
 
+/// Decodes a `BytesN<32>` (or any `Bytes`) ScVal to a hex string.
+pub fn sc_val_to_bytes_hex(val: &ScVal) -> Result<String> {
+    match val {
+        ScVal::Bytes(bytes) => Ok(hex::encode(bytes.0.as_slice())),
+        other => bail!("expected Bytes ScVal, got {other:?}"),
+    }
+}
+
+/// Converts a contract ledger timestamp (Unix seconds) to a `DateTime`.
+/// Contract-side "unset" sentinels (`0`, or an empty string for the
+/// URI/title fields these usually accompany) are the caller's concern --
+/// this just does the timestamp conversion.
+pub fn unix_seconds_to_datetime(secs: u64) -> Result<DateTime<Utc>> {
+    DateTime::from_timestamp(secs as i64, 0)
+        .ok_or_else(|| anyhow!("timestamp out of range: {secs}"))
+}
+
+/// Contract-side optional strings use `""` as "not set" (see the contract's
+/// `Milestone::evidence_uri` / `Escrow::title` docs) since Soroban structs
+/// don't support `Option` at low friction. The backend has no such
+/// constraint, so this is where that sentinel becomes a real `Option`.
+pub fn empty_as_none(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 /// Looks up a field by name in a contractevent's data map (keys are always
 /// `ScVal::Symbol`s matching the struct's field names).
 pub fn map_get<'a>(val: &'a ScVal, field: &str) -> Result<&'a ScVal> {
@@ -104,10 +134,14 @@ pub struct DecodedMilestone {
     pub id: u32,
     pub description: String,
     pub amount: i128,
+    pub deadline: u64,
 }
 
 /// Decodes the `milestones` field of an `EscrowCreated` event: a `Vec` of
-/// `Milestone` structs, each encoded as a `Map` keyed by field name.
+/// `Milestone` structs, each encoded as a `Map` keyed by field name. Only
+/// pulls the fields meaningful at creation time -- `status`,
+/// `submitted_at`, and the evidence fields are always their "just created"
+/// defaults here and arrive for real later via `milestone_submitted`.
 pub fn decode_milestones(val: &ScVal) -> Result<Vec<DecodedMilestone>> {
     let ScVal::Vec(Some(vec)) = val else {
         bail!("expected a Vec ScVal for milestones, got {val:?}");
@@ -119,6 +153,7 @@ pub fn decode_milestones(val: &ScVal) -> Result<Vec<DecodedMilestone>> {
                 id: sc_val_to_u32(map_get(entry, "id")?)?,
                 description: sc_val_to_string(map_get(entry, "description")?)?,
                 amount: sc_val_to_i128(map_get(entry, "amount")?)?,
+                deadline: sc_val_to_u64(map_get(entry, "deadline")?)?,
             })
         })
         .collect()
@@ -243,6 +278,10 @@ mod tests {
                             VecM::try_from(vec![symbol("Pending")]).unwrap(),
                         ))),
                     },
+                    ScMapEntry {
+                        key: symbol("deadline"),
+                        val: ScVal::U64(1_700_000_000),
+                    },
                 ])
                 .unwrap(),
             )))
@@ -261,7 +300,31 @@ mod tests {
         assert_eq!(milestones[0].id, 0);
         assert_eq!(milestones[0].description, "Design");
         assert_eq!(milestones[0].amount, 100);
+        assert_eq!(milestones[0].deadline, 1_700_000_000);
         assert_eq!(milestones[1].amount, 300);
+    }
+
+    #[test]
+    fn decodes_bytes_to_hex() {
+        let val = ScVal::Bytes(stellar_xdr::ScBytes(
+            vec![0xdeu8, 0xad, 0xbe, 0xef].try_into().unwrap(),
+        ));
+        assert_eq!(sc_val_to_bytes_hex(&val).unwrap(), "deadbeef");
+    }
+
+    #[test]
+    fn converts_unix_seconds_to_datetime() {
+        let dt = unix_seconds_to_datetime(1_700_000_000).unwrap();
+        assert_eq!(dt.timestamp(), 1_700_000_000);
+    }
+
+    #[test]
+    fn empty_string_becomes_none() {
+        assert_eq!(empty_as_none(String::new()), None);
+        assert_eq!(
+            empty_as_none("ipfs://x".to_string()),
+            Some("ipfs://x".to_string())
+        );
     }
 
     #[test]

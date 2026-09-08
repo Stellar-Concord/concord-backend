@@ -1,6 +1,6 @@
 use crate::models::{DisputeRow, EscrowRow, MilestoneRow, WebhookRow};
 use bigdecimal::BigDecimal;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
@@ -89,11 +89,19 @@ pub async fn upsert_escrow(
     token: &str,
     status: &str,
     ledger: i64,
+    review_period: i64,
+    chain_created_at: DateTime<Utc>,
+    title: Option<&str>,
+    metadata_uri: Option<&str>,
+    metadata_hash: Option<&str>,
 ) -> sqlx::Result<()> {
     sqlx::query(
         r#"
-        INSERT INTO escrows (id, contract_id, client, provider, arbitrator, token, status, updated_ledger)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO escrows (
+            id, contract_id, client, provider, arbitrator, token, status, updated_ledger,
+            review_period, chain_created_at, title, metadata_uri, metadata_hash
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT (id) DO UPDATE SET
             status = EXCLUDED.status,
             updated_at = now(),
@@ -109,6 +117,11 @@ pub async fn upsert_escrow(
     .bind(token)
     .bind(status)
     .bind(ledger)
+    .bind(review_period)
+    .bind(chain_created_at)
+    .bind(title)
+    .bind(metadata_uri)
+    .bind(metadata_hash)
     .execute(pool)
     .await?;
     Ok(())
@@ -142,11 +155,12 @@ pub async fn upsert_milestone(
     description: &str,
     amount: BigDecimal,
     status: &str,
+    deadline: DateTime<Utc>,
 ) -> sqlx::Result<()> {
     sqlx::query(
         r#"
-        INSERT INTO milestones (escrow_id, milestone_id, description, amount, status)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO milestones (escrow_id, milestone_id, description, amount, status, deadline)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (escrow_id, milestone_id) DO UPDATE SET
             status = EXCLUDED.status,
             updated_at = now()
@@ -157,6 +171,7 @@ pub async fn upsert_milestone(
     .bind(description)
     .bind(amount)
     .bind(status)
+    .bind(deadline)
     .execute(pool)
     .await?;
     Ok(())
@@ -174,6 +189,59 @@ pub async fn set_milestone_status(
     .bind(escrow_id)
     .bind(milestone_id)
     .bind(status)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Records a milestone submission: status, evidence, and when it happened,
+/// in one update.
+pub async fn mark_milestone_submitted(
+    pool: &PgPool,
+    escrow_id: i64,
+    milestone_id: i32,
+    evidence_uri: Option<&str>,
+    evidence_hash: Option<&str>,
+    submitted_at: DateTime<Utc>,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE milestones SET
+            status = 'submitted',
+            evidence_uri = $3,
+            evidence_hash = $4,
+            submitted_at = $5,
+            updated_at = now()
+        WHERE escrow_id = $1 AND milestone_id = $2
+        "#,
+    )
+    .bind(escrow_id)
+    .bind(milestone_id)
+    .bind(evidence_uri)
+    .bind(evidence_hash)
+    .bind(submitted_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Records a milestone release: status and how it happened (client
+/// approval vs. timeout auto-release), in one update.
+pub async fn release_milestone(
+    pool: &PgPool,
+    escrow_id: i64,
+    milestone_id: i32,
+    via: &str,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE milestones SET status = 'released', released_via = $3, updated_at = now()
+        WHERE escrow_id = $1 AND milestone_id = $2
+        "#,
+    )
+    .bind(escrow_id)
+    .bind(milestone_id)
+    .bind(via)
     .execute(pool)
     .await?;
     Ok(())

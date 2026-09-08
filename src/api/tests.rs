@@ -11,6 +11,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use bigdecimal::BigDecimal;
+use chrono::Utc;
 use http_body_util::BodyExt;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -72,6 +73,11 @@ async fn seed_escrow(
         "CTOKEN",
         status,
         1,
+        604_800,
+        Utc::now(),
+        None,
+        None,
+        None,
     )
     .await
     .unwrap();
@@ -88,9 +94,17 @@ async fn get_escrow_returns_404_when_missing(pool: PgPool) {
 #[sqlx::test]
 async fn get_escrow_returns_escrow_with_milestones(pool: PgPool) {
     seed_escrow(&pool, 1, "GCLIENT", "GPROVIDER", "GARBITRATOR", "created").await;
-    db::upsert_milestone(&pool, 1, 0, "Design", BigDecimal::from(100), "pending")
-        .await
-        .unwrap();
+    db::upsert_milestone(
+        &pool,
+        1,
+        0,
+        "Design",
+        BigDecimal::from(100),
+        "pending",
+        Utc::now(),
+    )
+    .await
+    .unwrap();
 
     let app = app(pool);
     let (status, body) = request(&app, get("/escrows/1")).await;
