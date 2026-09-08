@@ -230,6 +230,28 @@ async fn register_webhook_rejects_non_http_url(pool: PgPool) {
 }
 
 #[sqlx::test]
+async fn register_webhook_secrets_are_unique(pool: PgPool) {
+    seed_escrow(&pool, 1, "GCLIENT", "GPROVIDER", "GARBITRATOR", "created").await;
+    let app = app(pool);
+    let token = issue_jwt(JWT_SECRET, "GCLIENT").unwrap();
+
+    let register = || {
+        json_request(
+            "POST",
+            "/escrows/1/webhooks",
+            serde_json::json!({ "url": "https://example.com/hook" }),
+            Some(&token),
+        )
+    };
+    let (_, body_a) = request(&app, register()).await;
+    let (_, body_b) = request(&app, register()).await;
+
+    let secret_a = body_a["secret"].as_str().unwrap();
+    let secret_b = body_b["secret"].as_str().unwrap();
+    assert_ne!(secret_a, secret_b);
+}
+
+#[sqlx::test]
 async fn webhook_lifecycle_register_list_delete(pool: PgPool) {
     seed_escrow(&pool, 1, "GCLIENT", "GPROVIDER", "GARBITRATOR", "created").await;
     let app = app(pool);
@@ -245,6 +267,9 @@ async fn webhook_lifecycle_register_list_delete(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     let webhook_id = body["id"].as_str().unwrap().to_string();
     assert_eq!(body["owner_address"], "GCLIENT");
+    // The signing secret is shown exactly once, at creation.
+    let secret = body["secret"].as_str().unwrap().to_string();
+    assert_eq!(secret.len(), 64); // hex-encoded 32 bytes
 
     // The provider (also a legitimate party) shouldn't see the client's hook.
     let provider_token = issue_jwt(JWT_SECRET, "GPROVIDER").unwrap();
@@ -257,7 +282,7 @@ async fn webhook_lifecycle_register_list_delete(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body.as_array().unwrap().len(), 0);
 
-    // The client sees their own.
+    // The client sees their own, but never the secret again.
     let list_req = Request::builder()
         .uri("/escrows/1/webhooks")
         .header("authorization", format!("Bearer {client_token}"))
@@ -265,7 +290,9 @@ async fn webhook_lifecycle_register_list_delete(pool: PgPool) {
         .unwrap();
     let (status, body) = request(&app, list_req).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body.as_array().unwrap().len(), 1);
+    let webhooks = body.as_array().unwrap();
+    assert_eq!(webhooks.len(), 1);
+    assert!(webhooks[0].get("secret").is_none());
 
     // The provider can't delete the client's webhook.
     let delete_req = Request::builder()

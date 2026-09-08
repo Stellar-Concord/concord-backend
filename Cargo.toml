@@ -24,6 +24,8 @@ uuid = { version = "1.24.0", features = ["v4", "serde"] }
 bigdecimal = { version = "0.4", features = ["serde"] }
 rand = "0.8.8"
 hex = "0.4.3"
+hmac = "0.12.1"
+sha2 = "0.10.9"
 base64 = "0.22.1"
 dotenvy = "0.15.7"
 tracing = "0.1.44"

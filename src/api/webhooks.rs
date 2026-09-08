@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
 use crate::db;
 use crate::error::AppError;
-use crate::models::WebhookRow;
+use crate::models::{WebhookCreated, WebhookRow};
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::Deserialize;
@@ -19,7 +19,7 @@ pub async fn register_webhook(
     AuthUser(address): AuthUser,
     Path(escrow_id): Path<i64>,
     Json(req): Json<RegisterWebhookRequest>,
-) -> Result<Json<WebhookRow>, AppError> {
+) -> Result<Json<WebhookCreated>, AppError> {
     if !req.url.starts_with("https://") && !req.url.starts_with("http://") {
         return Err(AppError::BadRequest("url must be http(s)".into()));
     }
@@ -34,7 +34,7 @@ pub async fn register_webhook(
     }
 
     let webhook = db::insert_webhook(&pool, escrow_id, &address, &req.url).await?;
-    Ok(Json(webhook))
+    Ok(Json(webhook.into()))
 }
 
 pub async fn list_webhooks(

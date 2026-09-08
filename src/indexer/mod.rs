@@ -4,8 +4,10 @@ mod rpc;
 use crate::config::Config;
 use crate::db;
 use anyhow::{Context, Result};
+use hmac::{Hmac, Mac};
 use rpc::{RpcEvent, SorobanRpcClient};
 use serde_json::json;
+use sha2::Sha256;
 use sqlx::PgPool;
 use std::time::Duration;
 use stellar_xdr::ScVal;
@@ -189,14 +191,25 @@ async fn notify_webhooks(pool: &PgPool, http: &reqwest::Client, escrow_id: i64, 
         }
     };
     let payload = json!({ "escrow_id": escrow_id, "event": event });
+    // Serialize once and sign/send those exact bytes: reqwest's `.json()`
+    // convenience would re-serialize, and while serde_json is deterministic
+    // here, signing the bytes we actually transmit removes any doubt.
+    let body =
+        serde_json::to_vec(&payload).expect("json serialization of a simple map cannot fail");
+    let timestamp = chrono::Utc::now().timestamp();
+
     for webhook in webhooks {
         let http = http.clone();
-        let payload = payload.clone();
+        let body = body.clone();
         let url = webhook.url.clone();
+        let signature = sign_webhook_payload(&webhook.secret, timestamp, &body);
         tokio::spawn(async move {
             let result = http
                 .post(&url)
-                .json(&payload)
+                .header("content-type", "application/json")
+                .header("x-concord-timestamp", timestamp.to_string())
+                .header("x-concord-signature", format!("sha256={signature}"))
+                .body(body)
                 .timeout(Duration::from_secs(10))
                 .send()
                 .await;
@@ -204,5 +217,39 @@ async fn notify_webhooks(pool: &PgPool, http: &reqwest::Client, escrow_id: i64, 
                 tracing::warn!(?err, url, "webhook delivery failed");
             }
         });
+    }
+}
+
+/// HMAC-SHA256 over `"{timestamp}.{body}"`, hex-encoded. Consumers verify by
+/// recomputing this with their own copy of the webhook's secret (shown once,
+/// at registration) and comparing against the `x-concord-signature` header
+/// -- proving the payload actually came from us and wasn't tampered with in
+/// transit. Including the timestamp in the signed content, and expecting
+/// consumers to reject old ones, guards against replay.
+fn sign_webhook_payload(secret: &str, timestamp: i64, body: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts a key of any length");
+    mac.update(timestamp.to_string().as_bytes());
+    mac.update(b".");
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signature_is_deterministic_and_key_dependent() {
+        let body = br#"{"escrow_id":1,"event":"escrow_funded"}"#;
+        let sig_a = sign_webhook_payload("secret-a", 1_700_000_000, body);
+        let sig_a_again = sign_webhook_payload("secret-a", 1_700_000_000, body);
+        let sig_b = sign_webhook_payload("secret-b", 1_700_000_000, body);
+        let sig_different_time = sign_webhook_payload("secret-a", 1_700_000_001, body);
+
+        assert_eq!(sig_a, sig_a_again);
+        assert_ne!(sig_a, sig_b);
+        assert_ne!(sig_a, sig_different_time);
+        assert_eq!(sig_a.len(), 64); // hex-encoded SHA-256
     }
 }

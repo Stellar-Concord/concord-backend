@@ -120,4 +120,34 @@ pub struct WebhookRow {
     pub owner_address: String,
     pub url: String,
     pub created_at: DateTime<Utc>,
+    /// Used to sign delivered payloads (see `indexer::sign_webhook_payload`).
+    /// Never serialized: it's shown once, at creation (`WebhookCreated`),
+    /// and never again -- `GET .../webhooks` must not leak it.
+    #[serde(skip_serializing)]
+    pub secret: String,
+}
+
+/// Response for webhook registration only: the one time the signing secret
+/// is ever shown. Store it -- there's no way to retrieve it again.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebhookCreated {
+    pub id: uuid::Uuid,
+    pub escrow_id: i64,
+    pub owner_address: String,
+    pub url: String,
+    pub created_at: DateTime<Utc>,
+    pub secret: String,
+}
+
+impl From<WebhookRow> for WebhookCreated {
+    fn from(w: WebhookRow) -> Self {
+        Self {
+            id: w.id,
+            escrow_id: w.escrow_id,
+            owner_address: w.owner_address,
+            url: w.url,
+            created_at: w.created_at,
+            secret: w.secret,
+        }
+    }
 }

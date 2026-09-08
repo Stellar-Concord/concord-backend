@@ -235,10 +235,14 @@ pub async fn insert_webhook(
     url: &str,
 ) -> sqlx::Result<WebhookRow> {
     let id = uuid::Uuid::new_v4();
+    let mut secret_bytes = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut secret_bytes);
+    let secret = hex::encode(secret_bytes);
+
     sqlx::query_as::<_, WebhookRow>(
         r#"
-        INSERT INTO webhooks (id, escrow_id, owner_address, url, created_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO webhooks (id, escrow_id, owner_address, url, created_at, secret)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING *
         "#,
     )
@@ -247,6 +251,7 @@ pub async fn insert_webhook(
     .bind(owner_address)
     .bind(url)
     .bind(Utc::now())
+    .bind(secret)
     .fetch_one(pool)
     .await
 }
