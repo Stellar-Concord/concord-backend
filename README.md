@@ -1,11 +1,19 @@
 # concord-backend
 
-Event indexer and read API for [Concord](../concord-contracts)'s escrow
-contract. Polls Soroban RPC for the contract's events, reconstructs
+[![CI](https://github.com/Stellar-Concord/concord-backend/actions/workflows/ci.yml/badge.svg)](https://github.com/Stellar-Concord/concord-backend/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
+Event indexer and read API for [Concord](https://github.com/Stellar-Concord/concord-contracts)'s
+escrow contract, part of the **Concord** protocol alongside
+[`concord-contracts`](https://github.com/Stellar-Concord/concord-contracts)
+(the on-chain source of truth) and [`concord-frontend`](https://github.com/Stellar-Concord/concord-frontend)
+(reference UI).
+
+It polls Soroban RPC for the contract's events, reconstructs
 escrow/milestone/dispute state into Postgres, and serves it over a small
-REST API. Writes never go through this service — [`concord-frontend`](../concord-frontend)
+REST API. Writes never go through this service — `concord-frontend`
 talks to the contract directly with a wallet-signed transaction; this is
-purely the read side plus webhook notifications.
+purely the read side, plus webhook notifications.
 
 ```
 Soroban RPC ──(poll getEvents)──▶ indexer ──▶ Postgres ──▶ REST API ──▶ frontend / integrators
@@ -130,3 +138,7 @@ the per-event cursor field is `id`, not `pagingToken`) that are now fixed
 and regression-tested. See
 [`../concord-contracts/DEPLOYMENTS.md`](../concord-contracts/DEPLOYMENTS.md)
 for the full live-verification notes.
+
+## License
+
+[MIT](./LICENSE)
